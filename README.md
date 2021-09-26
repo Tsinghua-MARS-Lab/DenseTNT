@@ -1,7 +1,7 @@
 # DenseTNT
 ### [Paper](https://arxiv.org/abs/2108.09640) | [Webpage](https://tsinghua-mars-lab.github.io/DenseTNT/)
 - This is the official implementation of the paper: **DenseTNT: End-to-end Trajectory Prediction from Dense Goal Sets** (ICCV 2021).
-- Code will be released in **December 2021**.
+- Code will be released in **November 2021**.
 
 
 ## Citation
