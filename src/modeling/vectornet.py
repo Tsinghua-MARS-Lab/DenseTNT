@@ -118,7 +118,7 @@ class VectorNet(nn.Module):
             self.decoder.complete_traj_cross_attention = CrossAttention(hidden_size)
             self.decoder.complete_traj_decoder = DecoderResCat(hidden_size, hidden_size * 3, out_features=self.decoder.future_frame_num * 2)
 
-    def forward_encode_sub_graph(self, mapping: List[Dict], matrix: List[np.ndarray], polyline_spans: List[slice],
+    def forward_encode_sub_graph(self, mapping: List[Dict], matrix: List[np.ndarray], polyline_spans: List[List[slice]],
                                  device, batch_size) -> Tuple[List[Tensor], List[Tensor]]:
         """
         :param matrix: each value in list is vectors of all element (shape [-1, 128])

@@ -67,6 +67,11 @@ def do_eval(args):
     model_recover = torch.load(args.model_recover_path)
     model.load_state_dict(model_recover)
 
+    if 'set_predict-train_recover' in args.other_params and 'complete_traj' in args.other_params:
+        model_recover = torch.load(args.other_params['set_predict-train_recover'])
+        utils.load_model(model.decoder.complete_traj_cross_attention, model_recover, prefix='decoder.complete_traj_cross_attention.')
+        utils.load_model(model.decoder.complete_traj_decoder, model_recover, prefix='decoder.complete_traj_decoder.')
+
     model.to(device)
     model.eval()
     file2pred = {}

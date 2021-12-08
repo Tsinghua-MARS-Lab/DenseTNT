@@ -46,14 +46,28 @@ def is_main_device(device):
 def learning_rate_decay(args, i_epoch, optimizer, optimizer_2=None):
     utils.i_epoch = i_epoch
 
-    if i_epoch > 0 and i_epoch % 5 == 0:
-        for p in optimizer.param_groups:
-            p['lr'] *= 0.3
+    if 'set_predict' in args.other_params:
+        if not hasattr(args, 'set_predict_lr'):
+            args.set_predict_lr = 1.0
+        else:
+            args.set_predict_lr *= 0.9
 
-    if 'complete_traj-3' in args.other_params:
         if i_epoch > 0 and i_epoch % 5 == 0:
-            for p in optimizer_2.param_groups:
+            for p in optimizer.param_groups:
                 p['lr'] *= 0.3
+
+        if 'complete_traj-3' in args.other_params:
+            assert False
+
+    else:
+        if i_epoch > 0 and i_epoch % 5 == 0:
+            for p in optimizer.param_groups:
+                p['lr'] *= 0.3
+
+        if 'complete_traj-3' in args.other_params:
+            if i_epoch > 0 and i_epoch % 5 == 0:
+                for p in optimizer_2.param_groups:
+                    p['lr'] *= 0.3
 
 
 def gather_and_output_motion_metrics(args, device, queue, motion_metrics, metric_names, MotionMetrics):
@@ -133,10 +147,19 @@ def train_one_epoch(model, iter_bar, optimizer, device, args: utils.Args, i_epoc
     li_FDE = []
     utils.other_errors_dict.clear()
     start_time = time.time()
+    if 'data_ratio_per_epoch' in args.other_params:
+        max_iter_num = int(float(args.other_params['data_ratio_per_epoch']) * len(iter_bar))
+        if is_main_device(device):
+            print('data_ratio_per_epoch', float(args.other_params['data_ratio_per_epoch']))
+
     if args.distributed_training:
         assert dist.get_world_size() == args.distributed_training
 
     for step, batch in enumerate(iter_bar):
+        if 'data_ratio_per_epoch' in args.other_params:
+            max_iter_num -= 1
+            if max_iter_num == 0:
+                break
         loss, DE, _ = model(batch, device)
         loss.backward()
 

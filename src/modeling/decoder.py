@@ -76,7 +76,10 @@ class Decoder(nn.Module):
                     self.stage_one_goals_2D_decoder = DecoderResCat(hidden_size, hidden_size * 5, out_features=1)
         if 'set_predict' in args.other_params:
             if args.do_train:
-                model_recover = torch.load(args.model_recover_path)
+                if 'set_predict-train_recover' in args.other_params:
+                    model_recover = torch.load(args.other_params['set_predict-train_recover'])
+                else:
+                    model_recover = torch.load(args.model_recover_path)
                 vectornet.decoder = self
                 utils.load_model(vectornet, model_recover)
                 # self must be vectornet
@@ -87,12 +90,9 @@ class Decoder(nn.Module):
 
             self.set_predict_encoders = nn.ModuleList(
                 [GlobalGraphRes(hidden_size) for _ in range(args.other_params['set_predict'])])
-            if 'set_predict-6' in args.other_params:
-                self.set_predict_decoders = nn.ModuleList(
-                    [DecoderResCat(hidden_size, hidden_size * 2, out_features=13) for _ in range(args.other_params['set_predict'])])
-            else:
-                self.set_predict_decoders = nn.ModuleList(
-                    [DecoderResCat(hidden_size, hidden_size, out_features=12) for _ in range(args.other_params['set_predict'])])
+
+            self.set_predict_decoders = nn.ModuleList(
+                [DecoderResCat(hidden_size, hidden_size * 2, out_features=13) for _ in range(args.other_params['set_predict'])])
 
     def goals_2D_per_example_stage_one(self, i, mapping, lane_states_batch, inputs, inputs_lengths,
                                        hidden_states, device, loss):
@@ -258,7 +258,7 @@ class Decoder(nn.Module):
                     assert False
 
     def goals_2D_eval(self, batch_size, mapping, labels, hidden_states, inputs, inputs_lengths, device):
-        if 'set_predict-6' in args.other_params:
+        if 'set_predict' in args.other_params:
             pred_goals_batch = [mapping[i]['set_predict_ans_points'] for i in range(batch_size)]
             pred_probs_batch = np.zeros((batch_size, 6))
         elif 'optimization' in args.other_params:
@@ -437,38 +437,31 @@ class Decoder(nn.Module):
         gt_points = mapping[i]['labels'].reshape((self.future_frame_num, 2))
 
         if args.argoverse:
-            scores_positive_np = np.exp(np.array(scores.tolist(), dtype=np.float32))
-        goals_2D = goals_2D.astype(np.float32)
+            if 'set_predict-topk' in args.other_params:
+                topk_num = args.other_params['set_predict-topk']
 
-        if False:
-            mapping[i]['vis.goals_2D'] = goals_2D
-            mapping[i]['vis.scores'] = np.array(scores.tolist(), dtype=np.float32)
+                if topk_num == 0:
+                    topk_num = torch.sum(scores > np.log(0.00001)).item()
+
+                _, topk_ids = torch.topk(scores, k=min(topk_num, len(scores)))
+                goals_2D = goals_2D[topk_ids.cpu().numpy()]
+                scores = scores[topk_ids]
+
+        scores_positive_np = np.exp(np.array(scores.tolist(), dtype=np.float32))
+        goals_2D = goals_2D.astype(np.float32)
 
         max_point_idx = torch.argmax(scores)
         vectors_3D = torch.cat([torch.tensor(goals_2D, device=device, dtype=torch.float), scores.unsqueeze(1)], dim=-1)
         vectors_3D = torch.tensor(vectors_3D.tolist(), device=device, dtype=torch.float)
 
-        if 'set_predict-6' in args.other_params:
-            vectors_3D[:, 0] -= goals_2D[max_point_idx, 0]
-            vectors_3D[:, 1] -= goals_2D[max_point_idx, 1]
+        vectors_3D[:, 0] -= goals_2D[max_point_idx, 0]
+        vectors_3D[:, 1] -= goals_2D[max_point_idx, 1]
 
         points_feature = self.set_predict_point_feature(vectors_3D)
-        if args.do_train:
-            if args.argoverse:
-                def get_a_pred(path):
-                    argo_pred: structs.ArgoPred = \
-                        utils.get_static_var(self, f'argo_pred-{path}', path=path)
-                    a_pred = argo_pred[mapping[i]['file_name']].trajs[:, -1]
-                    a_pred = a_pred.copy()
-                    utils.to_relative_coordinate(a_pred, mapping[i]['cent_x'], mapping[i]['cent_y'], mapping[i]['angle'])
-                    return a_pred
-
-                a_pred = get_a_pred(args.other_params['set_predict-argo_pred'])
-            assert a_pred.shape == (6, 2)
-
         costs = np.zeros(args.other_params['set_predict'])
         pseudo_labels = []
         predicts = []
+
         set_predict_trajs_list = []
         group_scores = torch.zeros([len(self.set_predict_encoders)], device=device)
 
@@ -476,11 +469,14 @@ class Decoder(nn.Module):
 
         if True:
             for k, (encoder, decoder) in enumerate(zip(self.set_predict_encoders, self.set_predict_decoders)):
-                if args.output_dir.endswith('set_predict-cnn.8'):
+                if 'set_predict-one_encoder' in args.other_params:
                     encoder = self.set_predict_encoders[0]
 
-                if 'set_predict-6' in args.other_params:
-                    encoding = encoder(points_feature.unsqueeze(0)).squeeze(0)
+                if True:
+                    if 'set_predict-one_encoder' in args.other_params and k > 0:
+                        pass
+                    else:
+                        encoding = encoder(points_feature.unsqueeze(0)).squeeze(0)
 
                     decoding = decoder(torch.cat([torch.max(encoding, dim=0)[0], torch.mean(encoding, dim=0)], dim=-1)).view([13])
                     group_scores[k] = decoding[0]
@@ -488,15 +484,21 @@ class Decoder(nn.Module):
 
                     predict[:, 0] += goals_2D[max_point_idx, 0]
                     predict[:, 1] += goals_2D[max_point_idx, 1]
-                else:
-                    assert False
 
                 predicts.append(predict)
 
                 if args.do_eval:
                     pass
                 else:
-                    temp, costs[k], _ = utils.get_pseudo_label(np.array(predict.tolist()), a_pred)
+                    selected_points = np.array(predict.tolist(), dtype=np.float32)
+                    temp = None
+                    assert goals_2D.dtype == np.float32, goals_2D.dtype
+                    kwargs = None
+                    if 'set_predict-MRratio' in args.other_params:
+                        kwargs = {}
+                        kwargs['set_predict-MRratio'] = args.other_params['set_predict-MRratio']
+                    costs[k] = utils_cython.set_predict_get_value(goals_2D, scores_positive_np, selected_points, kwargs=kwargs)
+
                     pseudo_labels.append(temp)
 
         argmin = torch.argmax(group_scores).item()
@@ -506,8 +508,18 @@ class Decoder(nn.Module):
             group_scores = F.log_softmax(group_scores, dim=-1)
             min_cost_idx = np.argmin(costs)
             loss[i] = 0
-            loss[i] += F.smooth_l1_loss(predicts[min_cost_idx],
-                                        torch.tensor(pseudo_labels[min_cost_idx], device=device, dtype=torch.float))
+
+            if True:
+                selected_points = np.array(predicts[min_cost_idx].tolist(), dtype=np.float32)
+                kwargs = None
+                if 'set_predict-MRratio' in args.other_params:
+                    kwargs = {}
+                    kwargs['set_predict-MRratio'] = args.other_params['set_predict-MRratio']
+                _, dynamic_label = utils_cython.set_predict_next_step(goals_2D, scores_positive_np, selected_points,
+                                                                      lr=args.set_predict_lr, kwargs=kwargs)
+                # loss[i] += 2.0 / globals.set_predict_lr * \
+                #            F.l1_loss(predicts[min_cost_idx], torch.tensor(dynamic_label, device=device, dtype=torch.float))
+                loss[i] += 2.0 * F.l1_loss(predicts[min_cost_idx], torch.tensor(dynamic_label, device=device, dtype=torch.float))
 
             loss[i] += F.nll_loss(group_scores.unsqueeze(0), torch.tensor([min_cost_idx], device=device))
 

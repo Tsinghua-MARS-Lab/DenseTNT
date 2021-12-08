@@ -67,7 +67,7 @@ def add_argument(parser):
                         type=float,
                         help="The weight decay rate for Adam.")
     parser.add_argument("--num_train_epochs",
-                        default=30.0,
+                        default=20.0,
                         type=float,
                         help="Total number of training epochs to perform.")
     parser.add_argument('--seed',
