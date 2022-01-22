@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from torch import nn, Tensor
 
 from modeling.decoder import Decoder, DecoderResCat
-from modeling.lib import MLP, GlobalGraph, LayerNorm, SubGraph, CrossAttention, GlobalGraphRes
+from modeling.lib import MLP, GlobalGraph, LayerNorm, CrossAttention, GlobalGraphRes
 import utils
 
 
@@ -17,14 +17,14 @@ class NewSubGraph(nn.Module):
         if depth is None:
             depth = args.sub_graph_depth
         self.layers = nn.ModuleList([MLP(hidden_size, hidden_size // 2) for _ in range(depth)])
-        if 'point_level-4' in args.other_params:
-            self.layer_0 = MLP(hidden_size)
-            self.layers = nn.ModuleList([GlobalGraph(hidden_size, num_attention_heads=2) for _ in range(depth)])
-            self.layers_2 = nn.ModuleList([LayerNorm(hidden_size) for _ in range(depth)])
-            self.layers_3 = nn.ModuleList([LayerNorm(hidden_size) for _ in range(depth)])
-            self.layers_4 = nn.ModuleList([GlobalGraph(hidden_size) for _ in range(depth)])
-            if 'point_level-4-3' in args.other_params:
-                self.layer_0_again = MLP(hidden_size)
+
+        self.layer_0 = MLP(hidden_size)
+        self.layers = nn.ModuleList([GlobalGraph(hidden_size, num_attention_heads=2) for _ in range(depth)])
+        self.layers_2 = nn.ModuleList([LayerNorm(hidden_size) for _ in range(depth)])
+        self.layers_3 = nn.ModuleList([LayerNorm(hidden_size) for _ in range(depth)])
+        self.layers_4 = nn.ModuleList([GlobalGraph(hidden_size) for _ in range(depth)])
+        if 'point_level-4-3' in args.other_params:
+            self.layer_0_again = MLP(hidden_size)
 
     def forward(self, input_list: list):
         batch_size = len(input_list)
@@ -33,49 +33,24 @@ class NewSubGraph(nn.Module):
         hidden_size = hidden_states.shape[2]
         max_vector_num = hidden_states.shape[1]
 
-        if 'point_level-4' in args.other_params:
-            attention_mask = torch.zeros([batch_size, max_vector_num, max_vector_num], device=device)
-            hidden_states = self.layer_0(hidden_states)
+        attention_mask = torch.zeros([batch_size, max_vector_num, max_vector_num], device=device)
+        hidden_states = self.layer_0(hidden_states)
 
-            if 'point_level-4-3' in args.other_params:
-                hidden_states = self.layer_0_again(hidden_states)
-            for i in range(batch_size):
-                assert lengths[i] > 0
-                attention_mask[i, :lengths[i], :lengths[i]].fill_(1)
+        if 'point_level-4-3' in args.other_params:
+            hidden_states = self.layer_0_again(hidden_states)
+        for i in range(batch_size):
+            assert lengths[i] > 0
+            attention_mask[i, :lengths[i], :lengths[i]].fill_(1)
 
-            for layer_index, layer in enumerate(self.layers):
-                temp = hidden_states
-                # hidden_states = layer(hidden_states, attention_mask)
-                # hidden_states = self.layers_2[layer_index](hidden_states)
-                # hidden_states = F.relu(hidden_states) + temp
-                hidden_states = layer(hidden_states, attention_mask)
-                hidden_states = F.relu(hidden_states)
-                hidden_states = hidden_states + temp
-                hidden_states = self.layers_2[layer_index](hidden_states)
-        else:
-            attention_mask = torch.zeros([batch_size, max_vector_num, hidden_size // 2], device=device)
-            for i in range(batch_size):
-                assert lengths[i] > 0
-                attention_mask[i][lengths[i]:max_vector_num].fill_(-10000.0)
-
-            zeros = torch.zeros([hidden_size // 2], device=device)
-
-            for layer_index, layer in enumerate(self.layers):
-                new_hidden_states = torch.zeros([batch_size, max_vector_num, hidden_size], device=device)
-                encoded_hidden_states = layer(hidden_states)
-
-                if True:
-                    max_hidden, _ = torch.max(encoded_hidden_states + attention_mask, dim=1)
-                    max_hidden = torch.max(max_hidden, zeros.unsqueeze(0).expand_as(max_hidden))
-                    new_hidden_states = torch.cat(
-                        (encoded_hidden_states, max_hidden.unsqueeze(1).expand_as(encoded_hidden_states)), dim=-1)
-                # for j in range(max_vector_num):
-                #     attention_mask[:, j] += -10000.0
-                #     max_hidden, _ = torch.max(encoded_hidden_states + attention_mask, dim=1)
-                #     max_hidden = torch.max(max_hidden, zeros)
-                #     attention_mask[:, j] += 10000.0
-                #     new_hidden_states[:, j] = torch.cat((encoded_hidden_states[:, j], max_hidden), dim=-1)
-                hidden_states = new_hidden_states
+        for layer_index, layer in enumerate(self.layers):
+            temp = hidden_states
+            # hidden_states = layer(hidden_states, attention_mask)
+            # hidden_states = self.layers_2[layer_index](hidden_states)
+            # hidden_states = F.relu(hidden_states) + temp
+            hidden_states = layer(hidden_states, attention_mask)
+            hidden_states = F.relu(hidden_states)
+            hidden_states = hidden_states + temp
+            hidden_states = self.layers_2[layer_index](hidden_states)
 
         return torch.max(hidden_states, dim=1)[0], torch.cat(utils.de_merge_tensors(hidden_states, lengths))
 
@@ -95,12 +70,8 @@ class VectorNet(nn.Module):
         args = args_
         hidden_size = args.hidden_size
 
-        self.sub_graph = SubGraph(args, hidden_size)
-        if 'point_level' in args.other_params:
-            # TODO!  tnt needs stage_one?
-            # assert 'stage_one' in args.other_params
-            self.point_level_sub_graph = NewSubGraph(hidden_size)
-            self.point_level_cross_attention = CrossAttention(hidden_size)
+        self.point_level_sub_graph = NewSubGraph(hidden_size)
+        self.point_level_cross_attention = CrossAttention(hidden_size)
 
         self.global_graph = GlobalGraph(hidden_size)
         if 'enhance_global_graph' in args.other_params:
@@ -109,8 +80,6 @@ class VectorNet(nn.Module):
             self.laneGCN_A2L = CrossAttention(hidden_size)
             self.laneGCN_L2L = GlobalGraphRes(hidden_size)
             self.laneGCN_L2A = CrossAttention(hidden_size)
-        if 'stage_one' in args.other_params:
-            self.stage_one_sub_graph_map = SubGraph(args, hidden_size)
 
         self.decoder = Decoder(args, self)
 
@@ -143,23 +112,17 @@ class VectorNet(nn.Module):
             input_list_list.append(input_list)
             map_input_list_list.append(map_input_list)
 
-        if 'point_level' in args.other_params:
+        if True:
             element_states_batch = []
-            point_level_features_list = []
             for i in range(batch_size):
                 a, b = self.point_level_sub_graph(input_list_list[i])
                 element_states_batch.append(a)
-                point_level_features_list.append(b)
-                mapping[i]['point_level_features'] = point_level_features_list[i]
-        else:
-            element_states_batch = utils.merge_tensors_not_add_dim(input_list_list, module=self.sub_graph,
-                                                                   sub_batch_size=16, device=device)
 
         if 'stage_one' in args.other_params:
-            assert 'sub_graph_map' not in args.other_params
-            lane_states_batch = utils.merge_tensors_not_add_dim(map_input_list_list,
-                                                                module=self.stage_one_sub_graph_map,
-                                                                sub_batch_size=16, device=device)
+            lane_states_batch = []
+            for i in range(batch_size):
+                a, b = self.point_level_sub_graph(map_input_list_list[i])
+                lane_states_batch.append(a)
 
         if 'laneGCN' in args.other_params:
             inputs_before_laneGCN, inputs_lengths_before_laneGCN = utils.merge_tensors(element_states_batch, device=device)

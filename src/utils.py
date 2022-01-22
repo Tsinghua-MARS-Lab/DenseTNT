@@ -42,14 +42,16 @@ def add_argument(parser):
     parser.add_argument("--do_test",
                         action='store_true')
     parser.add_argument("--data_dir",
-                        nargs='*',
-                        default=["train/data/"],
+                        default='train/data/',
+                        type=str)
+    parser.add_argument("--data_dir_for_val",
+                        default='val/data/',
                         type=str)
     parser.add_argument("--output_dir", default="tmp/", type=str)
     parser.add_argument("--log_dir", default=None, type=str)
     parser.add_argument("--temp_file_dir", default=None, type=str)
     parser.add_argument("--train_batch_size",
-                        default=256,
+                        default=64,
                         type=int,
                         help="Total batch size for training.")
 
@@ -67,7 +69,7 @@ def add_argument(parser):
                         type=float,
                         help="The weight decay rate for Adam.")
     parser.add_argument("--num_train_epochs",
-                        default=20.0,
+                        default=16.0,
                         type=float,
                         help="Total number of training epochs to perform.")
     parser.add_argument('--seed',
@@ -275,7 +277,9 @@ def init(args_: Args, logger_):
 
     if args.do_eval:
         assert os.path.exists(args.output_dir)
-        assert os.path.exists('val') and os.path.exists('main')
+        assert os.path.exists(args.data_dir_for_val)
+    else:
+        assert os.path.exists(args.data_dir)
 
     if args.log_dir is None:
         args.log_dir = args.output_dir
@@ -315,7 +319,7 @@ def init(args_: Args, logger_):
 
     def init_args_do_eval():
         if args.argoverse:
-            args.data_dir = 'val/data/' if not args.do_test else 'test_obs/data/'
+            args.data_dir = args.data_dir_for_val if not args.do_test else 'test_obs/data/'
         if args.model_recover_path is None:
             args.model_recover_path = os.path.join(args.output_dir, 'model_save', 'model.16.bin')
         elif len(args.model_recover_path) <= 2:
@@ -807,29 +811,6 @@ def merge_tensors(tensors: List[torch.Tensor], device, hidden_size=None) -> Tupl
 
 def de_merge_tensors(tensor: Tensor, lengths):
     return [tensor[i, :lengths[i]] for i in range(len(lengths))]
-
-
-def merge_tensors_not_add_dim(tensor_list_list, module, sub_batch_size, device):
-    # TODO(cyrushx): Can you add docstring and comments on what this function does?
-    # this function is used to save memory in the past at the expense of readability,
-    # it will be removed because it is too complicated for understanding
-    batch_size = len(tensor_list_list)
-    output_tensor_list = []
-    for start in range(0, batch_size, sub_batch_size):
-        end = min(batch_size, start + sub_batch_size)
-        sub_tensor_list_list = tensor_list_list[start:end]
-        sub_tensor_list = []
-        for each in sub_tensor_list_list:
-            sub_tensor_list.extend(each)
-        inputs, lengths = merge_tensors(sub_tensor_list, device=device)
-        outputs = module(inputs, lengths)
-        sub_output_tensor_list = []
-        sum = 0
-        for each in sub_tensor_list_list:
-            sub_output_tensor_list.append(outputs[sum:sum + len(each)])
-            sum += len(each)
-        output_tensor_list.extend(sub_output_tensor_list)
-    return output_tensor_list
 
 
 def gather_tensors(tensor: torch.Tensor, indices: List[list]):

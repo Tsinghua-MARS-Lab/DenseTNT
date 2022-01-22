@@ -7,8 +7,8 @@
 
 Requires:
 
-* Python 3.6+
-* pytorch 1.6+
+* Python ≥ 3.6
+* PyTorch ≥ 1.6
 
 ### 1) Install Packages
 
@@ -17,17 +17,19 @@ Requires:
 ```
 
 ### 2) Install Argoverse API
+The latest version of Argoverse requires Python ≥ 3.7
+
+If using Python 3.6, you can install Argoverse v1.0 
 
 https://github.com/argoai/argoverse-api
 
 ### 3) Compile Cython
-Compile a .pyx file into a C file using Cython:
+Compile a .pyx file into a C file using Cython (already installed at step 1):
 
 
 ⚠️*Recompiling is needed every time the pyx files are changed.*
 ``` bash
-cd src/
-cython -a utils_cython.pyx && python setup.py build_ext --inplace
+cd src/ && cython -a utils_cython.pyx && python setup.py build_ext --inplace && cd ../
 ```
 
 ## Performance
@@ -80,14 +82,14 @@ OUTPUT_DIR=models.densetnt.1; \
 GPU_NUM=8; \
 python src/run.py --argoverse --future_frame_num 30 \
   --do_train --data_dir train/data/ --output_dir ${OUTPUT_DIR} \
-  --hidden_size 128 --train_batch_size 64 --sub_graph_batch_size 4096 --use_map \
+  --hidden_size 128 --train_batch_size 64 --use_map \
   --core_num 16 --use_centerline --distributed_training ${GPU_NUM} \
   --other_params \
     semantic_lane direction l1_loss \
     goals_2D enhance_global_graph subdivide lazy_points new laneGCN point_sub_graph \
-    stage_one stage_one_dynamic=0.95 laneGCN-4 point_level point_level-4 \
-    point_level-4-3 complete_traj complete_traj-3 \
+    stage_one stage_one_dynamic=0.95 laneGCN-4 point_level-4-3 complete_traj complete_traj-3 \
 ```
+Training takes 20 minutes per epoch and 5 hours for the default 16 epochs on 8 × 2080Ti. 
 
 ### 2) Evaluate
 Suppose the validation data of Argoverse motion forecasting is at ```./val/data/```.
@@ -110,13 +112,12 @@ MODEL_PATH=models.densetnt.1/model_save/model.16.bin; \
 GPU_NUM=8; \
 python src/run.py --argoverse --future_frame_num 30 \
   --do_train --data_dir train/data/ --output_dir ${OUTPUT_DIR} \
-  --hidden_size 128 --train_batch_size 64 --sub_graph_batch_size 4096 --use_map \
+  --hidden_size 128 --train_batch_size 64 --use_map \
   --core_num 16 --use_centerline --distributed_training ${GPU_NUM} \
   --other_params \
     semantic_lane direction l1_loss \
     goals_2D enhance_global_graph subdivide lazy_points new laneGCN point_sub_graph \
-    stage_one stage_one_dynamic=0.95 laneGCN-4 point_level point_level-4 \
-    point_level-4-3 complete_traj \
+    stage_one stage_one_dynamic=0.95 laneGCN-4 point_level-4-3 complete_traj \
     set_predict=6 set_predict-6 data_ratio_per_epoch=0.4 set_predict-topk=0 set_predict-one_encoder set_predict-MRratio=1.0 \
     set_predict-train_recover=${MODEL_PATH} \
 ```

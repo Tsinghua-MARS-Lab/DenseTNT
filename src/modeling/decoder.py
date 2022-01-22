@@ -69,11 +69,7 @@ class Decoder(nn.Module):
             self.stage_one_cross_attention = CrossAttention(hidden_size)
             self.stage_one_decoder = DecoderResCat(hidden_size, hidden_size * 3, out_features=1)
             self.stage_one_goals_2D_decoder = DecoderResCat(hidden_size, hidden_size * 4, out_features=1)
-            if 'point_level' in args.other_params:
-                if 'point_level-4' in args.other_params:
-                    pass
-                else:
-                    self.stage_one_goals_2D_decoder = DecoderResCat(hidden_size, hidden_size * 5, out_features=1)
+
         if 'set_predict' in args.other_params:
             if args.do_train:
                 if 'set_predict-train_recover' in args.other_params:
@@ -415,14 +411,6 @@ class Decoder(nn.Module):
                 goals_2D_hidden.unsqueeze(0), stage_one_topk_here.unsqueeze(0)).squeeze(0)
             li = [hidden_states[i, 0, :].unsqueeze(0).expand(goals_2D_hidden.shape),
                   goals_2D_hidden, goals_2D_hidden_attention, stage_one_goals_2D_hidden_attention]
-            if 'point_level' in args.other_params:
-                if 'point_level-4' in args.other_params:
-                    pass
-                else:
-                    # point_level_hidden_attention = torch.zeros(stage_one_goals_2D_hidden_attention.shape, device=device)
-                    point_level_hidden_attention = self.point_level_cross_attention(
-                        goals_2D_hidden.unsqueeze(0), mapping[i]['point_level_features'].unsqueeze(0)).squeeze(0)
-                    li.append(point_level_hidden_attention)
 
             scores = self.stage_one_goals_2D_decoder(torch.cat(li, dim=-1))
         else:

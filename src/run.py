@@ -20,8 +20,8 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 def compile_pyx_files():
     if True:
         os.chdir('src/')
-        if not os.path.exists('utils_cython.c') or not os.path.exists('utils_cython.cpython-36m-x86_64-linux-gnu.so') or \
-                os.path.getmtime('utils_cython.pyx') > os.path.getmtime('utils_cython.cpython-36m-x86_64-linux-gnu.so'):
+        if not os.path.exists('utils_cython.c') or \
+                os.path.getmtime('utils_cython.pyx') > os.path.getmtime('utils_cython.c'):
             os.system('cython -a utils_cython.pyx && python setup.py build_ext --inplace')
         os.chdir('../')
 
@@ -198,8 +198,7 @@ def train_one_epoch(model, iter_bar, optimizer, device, args: utils.Args, i_epoc
                       utils.get_miss_rate(li_FDE, dis=6.0))
 
         utils.logging(f'FDE: {np.mean(li_FDE) if len(li_FDE) > 0 else None}',
-                      f'MR(2,4,6): {miss_rates}',
-                      utils.other_errors_to_string(),
+                      f'MR(2m,4m,6m): {miss_rates}',
                       type='train_loss', to_screen=True)
 
 
@@ -250,7 +249,7 @@ def demo_basic(rank, world_size, kwargs, queue):
         train_dataset = Dataset(args, args.train_batch_size, to_screen=False)
 
         train_sampler = DistributedSampler(train_dataset, shuffle=args.do_train)
-
+        assert args.train_batch_size == 64, 'The optimal total batch size for training is 64'
         assert args.train_batch_size % world_size == 0
         train_dataloader = torch.utils.data.DataLoader(
             train_dataset, sampler=train_sampler,
