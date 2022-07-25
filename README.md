@@ -2,6 +2,8 @@
 ### [Paper](https://arxiv.org/abs/2108.09640) | [Webpage](https://tsinghua-mars-lab.github.io/DenseTNT/)
 - This is the official implementation of the paper: **DenseTNT: End-to-end Trajectory Prediction from Dense Goal Sets** (ICCV 2021).
 - **DenseTNT v1.0** was released in November 1st, 2021.
+- Updates: 
+  - July 25th, 2022: Add detailed code comments.
 
 ## Quick Start
 
@@ -73,6 +75,9 @@ Results on Argoverse motion forecasting validation set:
 </tbody>
 </table>
 
+A miss rate between 6.9% and 7.1% is considered reasonable. 
+A minFDE between 1.05 and 1.06 is considered reasonable. 
+
 ## DenseTNT
 
 ### 1) Train
@@ -86,8 +91,8 @@ python src/run.py --argoverse --future_frame_num 30 \
   --core_num 16 --use_centerline --distributed_training ${GPU_NUM} \
   --other_params \
     semantic_lane direction l1_loss \
-    goals_2D enhance_global_graph subdivide lazy_points new laneGCN point_sub_graph \
-    stage_one stage_one_dynamic=0.95 laneGCN-4 point_level-4-3 complete_traj complete_traj-3 \
+    goals_2D enhance_global_graph subdivide goal_scoring laneGCN point_sub_graph \
+    lane_scoring complete_traj complete_traj-3 \
 ```
 Training takes 20 minutes per epoch and 5 hours for the default 16 epochs on 8 × 2080Ti. 
 
@@ -116,8 +121,8 @@ python src/run.py --argoverse --future_frame_num 30 \
   --core_num 16 --use_centerline --distributed_training ${GPU_NUM} \
   --other_params \
     semantic_lane direction l1_loss \
-    goals_2D enhance_global_graph subdivide lazy_points new laneGCN point_sub_graph \
-    stage_one stage_one_dynamic=0.95 laneGCN-4 point_level-4-3 complete_traj \
+    goals_2D enhance_global_graph subdivide goal_scoring laneGCN point_sub_graph \
+    lane_scoring complete_traj \
     set_predict=6 set_predict-6 data_ratio_per_epoch=0.4 set_predict-topk=0 set_predict-one_encoder set_predict-MRratio=1.0 \
     set_predict-train_recover=${MODEL_PATH} \
 ```

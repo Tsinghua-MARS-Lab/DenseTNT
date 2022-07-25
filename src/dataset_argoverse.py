@@ -52,13 +52,11 @@ def get_sub_map(args: utils.Args, x, y, city_name, vectors=[], polyline_spans=[]
         pass
     else:
         assert isinstance(am, ArgoverseMap)
+        # Add more lane attributes, such as 'has_traffic_control', 'is_intersection' etc.
         if 'semantic_lane' in args.other_params:
             lane_ids = am.get_lane_ids_in_xy_bbox(x, y, city_name, query_search_range_manhattan=args.max_distance)
-            # lane_centerline = am.city_lane_centerlines_dict[city_name][lane_ids[0]].centerline
-            # print(lane_centerline.shape, am.get_ground_height_at_xy(lane_centerline, city_name))
             local_lane_centerlines = [am.get_lane_segment_centerline(lane_id, city_name) for lane_id in lane_ids]
             polygons = local_lane_centerlines
-            # z = am.get_ground_height_at_xy(np.array([[x, y]]), city_name)[0]
 
             if args.visualize:
                 angle = mapping['angle']
@@ -86,10 +84,6 @@ def get_sub_map(args: utils.Args, x, y, city_name, vectors=[], polyline_spans=[]
                     point[0] *= scale
                     point[1] *= scale
 
-        if args.use_centerline:
-            if 'semantic_lane' in args.other_params:
-                local_lane_centerlines = [polygon for polygon in polygons]
-
         def dis_2(point):
             return point[0] * point[0] + point[1] * point[1]
 
@@ -115,6 +109,9 @@ def get_sub_map(args: utils.Args, x, y, city_name, vectors=[], polyline_spans=[]
         for polygon_idx, lane_idx in enumerate(lane_ids):
             lane_idx_2_polygon_idx[lane_idx] = polygon_idx
 
+        # There is a lane scoring module (see Section 3.2) in the paper in order to reduce the number of goal candidates.
+        # In this implementation, we use goal scoring instead of lane scoring, because we observed that it performs slightly better than lane scoring.
+        # Here we only sample sparse goals, and dense goal sampling is performed after goal scoring (see decoder).
         if 'goals_2D' in args.other_params:
             points = []
             visit = {}
@@ -129,6 +126,7 @@ def get_sub_map(args: utils.Args, x, y, city_name, vectors=[], polyline_spans=[]
                         visit[hash] = True
                         points.append(point)
 
+                # Subdivide lanes to get more fine-grained 2D goals.
                 if 'subdivide' in args.other_params:
                     subdivide_points = get_subdivide_points(polygon)
                     points.extend(subdivide_points)
@@ -319,7 +317,7 @@ def preprocess(args, id2info, mapping):
         point_label = np.array(labels[-2:])
         mapping['goals_2D_labels'] = np.argmin(get_dis(mapping['goals_2D'], point_label))
 
-        if 'stage_one' in args.other_params:
+        if 'lane_scoring' in args.other_params:
             stage_one_label = 0
             polygons = mapping['polygons']
             min_dis = 10000.0
@@ -382,6 +380,8 @@ def argoverse_get_instance(lines, file_name, args):
             mapping['cent_y'] = agent_lines[-1][Y]
             mapping['agent_pred_index'] = len(agent_lines)
             mapping['two_seconds'] = line[TIMESTAMP]
+
+            # Smooth the direction of agent. Only taking the direction of the last frame is not accurate due to label error.
             if 'direction' in args.other_params:
                 span = agent_lines[-6:]
                 intervals = [2]
@@ -412,6 +412,8 @@ def argoverse_get_instance(lines, file_name, args):
         mapping['origin_labels'] = origin_labels
 
     angle = -get_angle(der_x, der_y) + math.radians(90)
+
+    # Smooth the direction of agent. Only taking the direction of the last frame is not accurate due to label error.
     if 'direction' in args.other_params:
         angles = np.array(angles)
         der_x, der_y = np.mean(angles, axis=0)

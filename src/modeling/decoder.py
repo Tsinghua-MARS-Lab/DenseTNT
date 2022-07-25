@@ -63,9 +63,11 @@ class Decoder(nn.Module):
             # self.goals_2D_decoder = DecoderRes(hidden_size * 3, out_features=1)
             self.goals_2D_decoder = DecoderResCat(hidden_size, hidden_size * 3, out_features=1)
             self.goals_2D_cross_attention = CrossAttention(hidden_size)
+            # Fuse goal feature and agent feature when encoding goals.
             if 'point_sub_graph' in args.other_params:
                 self.goals_2D_point_sub_graph = PointSubGraph(hidden_size)
-        if 'stage_one' in args.other_params:
+
+        if 'lane_scoring' in args.other_params:
             self.stage_one_cross_attention = CrossAttention(hidden_size)
             self.stage_one_decoder = DecoderResCat(hidden_size, hidden_size * 3, out_features=1)
             self.stage_one_goals_2D_decoder = DecoderResCat(hidden_size, hidden_size * 4, out_features=1)
@@ -90,8 +92,8 @@ class Decoder(nn.Module):
             self.set_predict_decoders = nn.ModuleList(
                 [DecoderResCat(hidden_size, hidden_size * 2, out_features=13) for _ in range(args.other_params['set_predict'])])
 
-    def goals_2D_per_example_stage_one(self, i, mapping, lane_states_batch, inputs, inputs_lengths,
-                                       hidden_states, device, loss):
+    def lane_scoring(self, i, mapping, lane_states_batch, inputs, inputs_lengths,
+                     hidden_states, device, loss):
         def get_stage_one_scores():
             stage_one_hidden = lane_states_batch[i]
             stage_one_hidden_attention = self.stage_one_cross_attention(
@@ -104,14 +106,13 @@ class Decoder(nn.Module):
 
         stage_one_scores = get_stage_one_scores()
         assert len(stage_one_scores) == len(mapping[i]['polygons'])
-        mapping[i]['stage_one_scores'] = stage_one_scores
-        # print('stage_one_scores', stage_one_scores.requires_grad)
         loss[i] += F.nll_loss(stage_one_scores.unsqueeze(0),
                               torch.tensor([mapping[i]['stage_one_label']], device=device))
-        # print('stage_one_scores-2', loss[i].requires_grad)
-        if 'stage_one_dynamic' in args.other_params:
+
+        # Select top K lanes, where K is dynamic. The sum of the probabilities of selected lanes is larger than threshold (0.95).
+        if True:
             _, stage_one_topk_ids = torch.topk(stage_one_scores, k=len(stage_one_scores))
-            threshold = float(args.other_params['stage_one_dynamic'])
+            threshold = 0.95
             sum = 0.0
             for idx, each in enumerate(torch.exp(stage_one_scores[stage_one_topk_ids])):
                 sum += each
@@ -119,21 +120,18 @@ class Decoder(nn.Module):
                     stage_one_topk_ids = stage_one_topk_ids[:idx + 1]
                     break
             utils.other_errors_put('stage_one_k', len(stage_one_topk_ids))
-        else:
-            _, stage_one_topk_ids = torch.topk(stage_one_scores, k=min(args.stage_one_K, len(stage_one_scores)))
+        # _, stage_one_topk_ids = torch.topk(stage_one_scores, k=min(args.stage_one_K, len(stage_one_scores)))
 
         if mapping[i]['stage_one_label'] in stage_one_topk_ids.tolist():
             utils.other_errors_put('stage_one_recall', 1.0)
         else:
             utils.other_errors_put('stage_one_recall', 0.0)
 
-        stage_one_topk = lane_states_batch[i][stage_one_topk_ids]
-        mapping[i]['stage_one_topk'] = stage_one_topk
+        topk_lanes = lane_states_batch[i][stage_one_topk_ids]
+        return topk_lanes
 
-        return stage_one_topk_ids
-
-    def goals_2D_per_example_lazy_points(self, i, goals_2D, mapping, labels, device, scores,
-                                         get_scores_inputs, stage_one_topk_ids=None, gt_points=None):
+    def get_scores_of_dense_goals(self, i, goals_2D, mapping, labels, device, scores,
+                                  get_scores_inputs, gt_points=None):
         if args.argoverse:
             k = 150
         else:
@@ -141,27 +139,25 @@ class Decoder(nn.Module):
         _, topk_ids = torch.topk(scores, k=min(k, len(scores)))
         topk_ids = topk_ids.tolist()
 
-        goals_2D_new = utils.get_neighbour_points(goals_2D[topk_ids], topk_ids=topk_ids, mapping=mapping[i])
+        # Sample dense goals from top K sparse goals.
+        goals_2D_dense = utils.get_neighbour_points(goals_2D[topk_ids], topk_ids=topk_ids, mapping=mapping[i])
 
-        goals_2D_new = torch.cat([torch.tensor(goals_2D_new, device=device, dtype=torch.float),
-                                  torch.tensor(goals_2D, device=device, dtype=torch.float)], dim=0)
+        goals_2D_dense = torch.cat([torch.tensor(goals_2D_dense, device=device, dtype=torch.float),
+                                    torch.tensor(goals_2D, device=device, dtype=torch.float)], dim=0)
 
         old_vector_num = len(goals_2D)
 
-        goals_2D = np.array(goals_2D_new.tolist())
-        # print('len', len(goals_2D))
-
-        scores = self.get_scores(goals_2D_new, *get_scores_inputs)
+        scores = self.get_scores(goals_2D_dense, *get_scores_inputs)
 
         index = torch.argmax(scores).item()
-        point = np.array(goals_2D_new[index].tolist())
+        point = np.array(goals_2D_dense[index].tolist())
 
         if not args.do_test:
             label = np.array(labels[i]).reshape([self.future_frame_num, 2])
             final_idx = mapping[i].get('final_idx', -1)
-            mapping[i]['goals_2D_labels'] = np.argmin(utils.get_dis(goals_2D, label[final_idx]))
+            mapping[i]['goals_2D_labels'] = np.argmin(utils.get_dis(goals_2D_dense.detach().cpu().numpy(), label[final_idx]))
 
-        return scores, point, goals_2D
+        return scores, point, goals_2D_dense.detach().cpu().numpy()
 
     def goals_2D_per_example_calc_loss(self, i: int, goals_2D: np.ndarray, mapping: List[Dict], inputs: Tensor,
                                        inputs_lengths: List[int], hidden_states: Tensor, device, loss: Tensor,
@@ -209,23 +205,29 @@ class Decoder(nn.Module):
 
         gt_points = labels[i].reshape([self.future_frame_num, 2])
 
-        stage_one_topk_ids = None
-        if 'stage_one' in args.other_params:
-            stage_one_topk_ids = self.goals_2D_per_example_stage_one(i, mapping, lane_states_batch, inputs, inputs_lengths,
-                                                                     hidden_states, device, loss)
+        topk_lanes = None
+        # Get top K lanes with the highest probability.
+        if 'lane_scoring' in args.other_params:
+            topk_lanes = self.lane_scoring(i, mapping, lane_states_batch, inputs, inputs_lengths,
+                                           hidden_states, device, loss)
 
-        goals_2D_tensor = torch.tensor(goals_2D, device=device, dtype=torch.float)
-        get_scores_inputs = (inputs, hidden_states, inputs_lengths, i, mapping, device)
+        get_scores_inputs = (inputs, hidden_states, inputs_lengths, i, mapping, device, topk_lanes)
 
-        scores = self.get_scores(goals_2D_tensor, *get_scores_inputs)
-        index = torch.argmax(scores).item()
-        highest_goal = goals_2D[index]
+        # There is a lane scoring module (see Section 3.2) in the paper in order to reduce the number of goal candidates.
+        # In this implementation, we use goal scoring instead of lane scoring, because we observed that it performs slightly better than lane scoring.
+        # Here goals_2D are sparse cnadidate goals sampled from map.
+        if 'goal_scoring' in args.other_params:
+            goals_2D_tensor = torch.tensor(goals_2D, device=device, dtype=torch.float)
+            scores = self.get_scores(goals_2D_tensor, *get_scores_inputs)
+            index = torch.argmax(scores).item()
+            highest_goal = goals_2D[index]
 
-        if 'lazy_points' in args.other_params:
-            scores, highest_goal, goals_2D = \
-                self.goals_2D_per_example_lazy_points(i, goals_2D, mapping, labels, device, scores,
-                                                      get_scores_inputs, stage_one_topk_ids, gt_points)
-            index = None
+        # Get dense goals and their scores.
+        # With the help of the above goal scoring, we can reduce the number of dense goals.
+        # After this step, goals_2D become dense goals.
+        scores, highest_goal, goals_2D = \
+            self.get_scores_of_dense_goals(i, goals_2D, mapping, labels, device, scores,
+                                           get_scores_inputs, gt_points)
 
         if args.do_train:
             self.goals_2D_per_example_calc_loss(i, goals_2D, mapping, inputs, inputs_lengths,
@@ -390,11 +392,12 @@ class Decoder(nn.Module):
         else:
             assert False
 
-    def get_scores(self, goals_2D_tensor: Tensor, inputs, hidden_states, inputs_lengths, i, mapping, device):
+    def get_scores(self, goals_2D_tensor: Tensor, inputs, hidden_states, inputs_lengths, i, mapping, device, topk_lanes):
         """
         :param goals_2D_tensor: candidate goals sampled from map (shape ['goal num', 2])
         :return: log scores of goals (shape ['goal num'])
         """
+        # Fuse goal feature and agent feature when encoding goals.
         if 'point_sub_graph' in args.other_params:
             goals_2D_hidden = self.goals_2D_point_sub_graph(goals_2D_tensor.unsqueeze(0), hidden_states[i, 0:1, :]).squeeze(0)
         else:
@@ -403,12 +406,10 @@ class Decoder(nn.Module):
         goals_2D_hidden_attention = self.goals_2D_cross_attention(
             goals_2D_hidden.unsqueeze(0), inputs[i][:inputs_lengths[i]].unsqueeze(0)).squeeze(0)
 
-        if 'stage_one' in args.other_params:
-            stage_one_topk = mapping[i]['stage_one_topk']
-            stage_one_scores = mapping[i]['stage_one_scores']
-            stage_one_topk_here = stage_one_topk
+        if 'lane_scoring' in args.other_params:
+            # Perform cross attention from goals to top K lanes. It's a trick to improve model performance.
             stage_one_goals_2D_hidden_attention = self.goals_2D_cross_attention(
-                goals_2D_hidden.unsqueeze(0), stage_one_topk_here.unsqueeze(0)).squeeze(0)
+                goals_2D_hidden.unsqueeze(0), topk_lanes.unsqueeze(0)).squeeze(0)
             li = [hidden_states[i, 0, :].unsqueeze(0).expand(goals_2D_hidden.shape),
                   goals_2D_hidden, goals_2D_hidden_attention, stage_one_goals_2D_hidden_attention]
 

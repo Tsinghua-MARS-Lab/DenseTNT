@@ -23,8 +23,7 @@ class NewSubGraph(nn.Module):
         self.layers_2 = nn.ModuleList([LayerNorm(hidden_size) for _ in range(depth)])
         self.layers_3 = nn.ModuleList([LayerNorm(hidden_size) for _ in range(depth)])
         self.layers_4 = nn.ModuleList([GlobalGraph(hidden_size) for _ in range(depth)])
-        if 'point_level-4-3' in args.other_params:
-            self.layer_0_again = MLP(hidden_size)
+        self.layer_0_again = MLP(hidden_size)
 
     def forward(self, input_list: list):
         batch_size = len(input_list)
@@ -35,9 +34,7 @@ class NewSubGraph(nn.Module):
 
         attention_mask = torch.zeros([batch_size, max_vector_num, max_vector_num], device=device)
         hidden_states = self.layer_0(hidden_states)
-
-        if 'point_level-4-3' in args.other_params:
-            hidden_states = self.layer_0_again(hidden_states)
+        hidden_states = self.layer_0_again(hidden_states)
         for i in range(batch_size):
             assert lengths[i] > 0
             attention_mask[i, :lengths[i], :lengths[i]].fill_(1)
@@ -74,6 +71,8 @@ class VectorNet(nn.Module):
         self.point_level_cross_attention = CrossAttention(hidden_size)
 
         self.global_graph = GlobalGraph(hidden_size)
+
+        # Use multi-head attention and residual connection.
         if 'enhance_global_graph' in args.other_params:
             self.global_graph = GlobalGraphRes(hidden_size)
         if 'laneGCN' in args.other_params:
@@ -118,19 +117,20 @@ class VectorNet(nn.Module):
                 a, b = self.point_level_sub_graph(input_list_list[i])
                 element_states_batch.append(a)
 
-        if 'stage_one' in args.other_params:
+        if 'lane_scoring' in args.other_params:
             lane_states_batch = []
             for i in range(batch_size):
                 a, b = self.point_level_sub_graph(map_input_list_list[i])
                 lane_states_batch.append(a)
 
+        # We follow laneGCN to fuse realtime traffic information from agent nodes to lane nodes.
         if 'laneGCN' in args.other_params:
-            inputs_before_laneGCN, inputs_lengths_before_laneGCN = utils.merge_tensors(element_states_batch, device=device)
             for i in range(batch_size):
                 map_start_polyline_idx = mapping[i]['map_start_polyline_idx']
                 agents = element_states_batch[i][:map_start_polyline_idx]
                 lanes = element_states_batch[i][map_start_polyline_idx:]
-                if 'laneGCN-4' in args.other_params:
+                # Origin laneGCN contains three fusion layers. Here one fusion layer is enough.
+                if True:
                     lanes = lanes + self.laneGCN_A2L(lanes.unsqueeze(0), torch.cat([lanes, agents[0:1]]).unsqueeze(0)).squeeze(0)
                 else:
                     lanes = lanes + self.laneGCN_A2L(lanes.unsqueeze(0), agents.unsqueeze(0)).squeeze(0)
