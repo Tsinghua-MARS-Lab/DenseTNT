@@ -105,7 +105,10 @@ class Decoder(nn.Module):
             return stage_one_scores
 
         stage_one_scores = get_stage_one_scores()
-        assert len(stage_one_scores) == len(mapping[i]['polygons'])
+        if args.argoverse2:
+            assert len(stage_one_scores) == len(mapping[i]['polygons']) // 2
+        else:
+            assert len(stage_one_scores) == len(mapping[i]['polygons'])
         loss[i] += F.nll_loss(stage_one_scores.unsqueeze(0),
                               torch.tensor([mapping[i]['stage_one_label']], device=device))
 

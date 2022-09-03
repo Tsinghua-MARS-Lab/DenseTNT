@@ -180,6 +180,8 @@ def add_argument(parser):
                         action='store_true')
     parser.add_argument("--argoverse",
                         action='store_true')
+    parser.add_argument("--argoverse2",
+                        action='store_true')
     parser.add_argument("--nuscenes",
                         action='store_true')
     parser.add_argument("--future_frame_num",
@@ -251,6 +253,7 @@ class Args:
     method_span = None
     waymo = None
     argoverse = None
+    argoverse2 = None
     nuscenes = None
     single_agent = None
     agent_type = None
@@ -1710,15 +1713,13 @@ class Normalizer:
 
     def __call__(self, points, reverse=False):
         points = np.array(points)
-        if points.shape == (2,):
-            points.shape = (1, 2)
-        assert len(points.shape) <= 3
+        assert 1 <= len(points.shape) <= 3 and 2 <= points.shape[-1] <= 3
         if len(points.shape) == 3:
             for each in points:
                 each[:] = self.__call__(each, reverse)
         else:
-            assert len(points.shape) == 2
-            for point in points:
+            point_list = [points] if points.shape == (2,) else [point for point in points]
+            for point in point_list:
                 if reverse:
                     point[0], point[1] = rotate(point[0] - self.origin[0],
                                                 point[1] - self.origin[1], -self.yaw)

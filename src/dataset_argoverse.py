@@ -8,10 +8,10 @@ import zlib
 from collections import defaultdict
 from multiprocessing import Process
 from random import choice
+from pathlib import Path
 
 import numpy as np
 import torch
-from argoverse.map_representation.map_api import ArgoverseMap
 from tqdm import tqdm
 
 import utils_cython
@@ -51,6 +51,7 @@ def get_sub_map(args: utils.Args, x, y, city_name, vectors=[], polyline_spans=[]
     if args.not_use_api:
         pass
     else:
+        from argoverse.map_representation.map_api import ArgoverseMap
         assert isinstance(am, ArgoverseMap)
         # Add more lane attributes, such as 'has_traffic_control', 'is_intersection' etc.
         if 'semantic_lane' in args.other_params:
@@ -340,6 +341,263 @@ def preprocess(args, id2info, mapping):
     return mapping
 
 
+def get_mark_type_to_int():
+    from av2.map.lane_segment import LaneMarkType
+    mark_types = [LaneMarkType.DASH_SOLID_YELLOW,
+                  LaneMarkType.DASH_SOLID_WHITE,
+                  LaneMarkType.DASHED_WHITE,
+                  LaneMarkType.DASHED_YELLOW,
+                  LaneMarkType.DOUBLE_SOLID_YELLOW,
+                  LaneMarkType.DOUBLE_SOLID_WHITE,
+                  LaneMarkType.DOUBLE_DASH_YELLOW,
+                  LaneMarkType.DOUBLE_DASH_WHITE,
+                  LaneMarkType.SOLID_YELLOW,
+                  LaneMarkType.SOLID_WHITE,
+                  LaneMarkType.SOLID_DASH_WHITE,
+                  LaneMarkType.SOLID_DASH_YELLOW,
+                  LaneMarkType.SOLID_BLUE,
+                  LaneMarkType.NONE,
+                  LaneMarkType.UNKNOWN]
+    mark_type_to_int = defaultdict(int)
+    for i, each in enumerate(mark_types):
+        mark_type_to_int[each] = i + 1
+    return mark_type_to_int
+
+
+def argoverse2_load_scenario(instance_dir):
+    from av2.datasets.motion_forecasting import scenario_serialization
+    file_path = sorted(Path(instance_dir).glob("*.parquet"))
+    assert len(file_path) == 1
+    file_path = file_path[0]
+    return scenario_serialization.load_argoverse_scenario_parquet(file_path)
+
+
+def argoverse2_load_map(instance_dir):
+    log_map_dirpath = Path(instance_dir)
+    from av2.map.map_api import ArgoverseStaticMap
+    vector_data_fnames = sorted(log_map_dirpath.glob("log_map_archive_*.json"))
+    if not len(vector_data_fnames) == 1:
+        raise RuntimeError(f"JSON file containing vector map data is missing (searched in {log_map_dirpath})")
+    vector_data_fname = vector_data_fnames[0]
+    return ArgoverseStaticMap.from_json(vector_data_fname)
+
+
+def argoverse2_get_instance(args: utils.Args, instance_dir):
+    from av2.datasets.motion_forecasting import data_schema
+    from av2.datasets.motion_forecasting.data_schema import ObjectType
+
+    scenario = argoverse2_load_scenario(instance_dir)
+
+    object_type_to_int = defaultdict(int)
+    object_type_to_int[ObjectType.VEHICLE] = 1
+    object_type_to_int[ObjectType.PEDESTRIAN] = 2
+    object_type_to_int[ObjectType.MOTORCYCLIST] = 3
+    object_type_to_int[ObjectType.CYCLIST] = 4
+    object_type_to_int[ObjectType.BUS] = 5
+
+    mapping = {}
+    vectors = []
+    polyline_spans = []
+    agents = []
+    polygons = []
+    labels = []
+
+    # find focal track
+    if True:
+        tracks = []
+        focal_track = None
+        for track in scenario.tracks:
+            if track.category == data_schema.TrackCategory.FOCAL_TRACK:
+                assert track.track_id == scenario.focal_track_id
+                focal_track = track
+            else:
+                tracks.append(track)
+        assert focal_track is not None
+        tracks = [focal_track] + tracks
+
+        len(focal_track.object_states)
+        len(tracks[-1].object_states)
+
+    # find current coordinates and labels of focal track
+    if True:
+        cent_x = None
+        cent_y = None
+        angle = None
+        normalizer = None
+
+        assert len(focal_track.object_states) == 110
+        for timestep, state in enumerate(focal_track.object_states):
+            assert timestep == state.timestep
+            # current timestep
+            if state.timestep == 50 - 1:
+                cent_x = state.position[0]
+                cent_y = state.position[1]
+                angle = -state.heading + math.radians(90)
+                normalizer = utils.Normalizer(cent_x, cent_y, angle)
+            elif state.timestep >= 50:
+                labels.append(normalizer((state.position[0], state.position[1])))
+
+        assert cent_x is not None
+        mapping.update(dict(
+            cent_x=cent_x,
+            cent_y=cent_y,
+            angle=angle,
+            normalizer=normalizer,
+        ))
+
+    for track in tracks:
+        assert isinstance(track, data_schema.Track)
+        start = len(vectors)
+
+        agent = []
+        timestep_to_state = {}
+        for state in track.object_states:
+            if state.observed:
+                assert state.timestep < 50
+                timestep_to_state[state.timestep] = state
+                agent.append(normalizer([state.position[0], state.position[1]]))
+
+        i = 0
+        while i < 50:
+            if i in timestep_to_state:
+                state = timestep_to_state[i]
+
+                vector = np.zeros(args.hidden_size)
+                assert isinstance(state, data_schema.ObjectState)
+
+                vector[0], vector[1] = normalizer((state.position[0], state.position[1]))
+                vector[2], vector[3] = rotate(state.velocity[0], state.velocity[1], angle)
+                vector[4] = state.heading + angle
+                vector[5] = state.timestep
+
+                vector[10 + object_type_to_int[track.object_type]] = 1
+
+                offset = 20
+                for j in range(8):
+                    if (i + j) in timestep_to_state:
+                        t = timestep_to_state[i + j].position
+                        vector[offset + j * 3], vector[offset + j * 3 + 1] = normalizer((t[0], t[1]))
+                        vector[offset + j * 3 + 2] = 1
+
+                i += 4
+                vectors.append(vector[::-1])
+            else:
+                i += 1
+
+        end = len(vectors)
+        if end > start:
+            agents.append(np.array(agent))
+            polyline_spans.append([start, end])
+
+    map_start_polyline_idx = len(polyline_spans)
+
+    if args.use_map:
+        from av2.map.lane_segment import LaneType, LaneMarkType
+
+        lane_type_to_int = defaultdict(int)
+        lane_type_to_int[LaneType.VEHICLE] = 1
+        lane_type_to_int[LaneType.BIKE] = 1
+        lane_type_to_int[LaneType.BUS] = 1
+
+        mark_type_to_int = get_mark_type_to_int()
+
+        argoverse2_map = argoverse2_load_map(instance_dir)
+        for lane_segment in argoverse2_map.vector_lane_segments.values():
+            start = len(vectors)
+
+            for waypoints in [lane_segment.left_lane_boundary.waypoints, lane_segment.right_lane_boundary.waypoints]:
+                polyline = []
+                for point in waypoints:
+                    polyline.append(normalizer([point.x, point.y]))
+                polyline = np.array(polyline)
+                polygons.append(polyline)
+
+                for i in range(len(polyline)):
+                    vector = np.zeros(args.hidden_size)
+                    vector[0] = lane_segment.is_intersection
+
+                    offset = 10
+                    for j in range(5):
+                        if i + j < len(polyline):
+                            vector[offset + j * 2] = polyline[i + j, 0]
+                            vector[offset + j * 2 + 1] = polyline[i + j, 1]
+
+                    vectors.append(vector)
+
+                    offset = 30
+                    vector[offset + mark_type_to_int[lane_segment.left_mark_type]] = 1
+
+                    offset = 50
+                    vector[offset + mark_type_to_int[lane_segment.right_mark_type]] = 1
+
+                    offset = 70
+                    vector[offset + lane_type_to_int[lane_segment.lane_type]] = 1
+
+            end = len(vectors)
+            if end > start:
+                polyline_spans.append([start, end])
+
+        argoverse2_map.get_scenario_lane_segment_ids()
+
+        if 'goals_2D' in args.other_params:
+            points = []
+            visit = {}
+
+            def get_hash(point):
+                return round((point[0] + 500) * 100) * 1000000 + round((point[1] + 500) * 100)
+
+            for index_polygon, polygon in enumerate(polygons):
+                for i, point in enumerate(polygon):
+                    hash = get_hash(point)
+                    if hash not in visit:
+                        visit[hash] = True
+                        points.append(point)
+
+                # Subdivide lanes to get more fine-grained 2D goals.
+                if 'subdivide' in args.other_params:
+                    subdivide_points = get_subdivide_points(polygon)
+                    points.extend(subdivide_points)
+
+            mapping['goals_2D'] = np.array(points)
+
+        pass
+
+    if 'goals_2D' in args.other_params:
+        point_label = np.array(labels[-1])
+        mapping['goals_2D_labels'] = np.argmin(get_dis(mapping['goals_2D'], point_label))
+
+        if 'lane_scoring' in args.other_params:
+            stage_one_label = 0
+            min_dis = 10000.0
+            for i, polygon in enumerate(polygons):
+                temp = np.min(get_dis(polygon, point_label))
+                if temp < min_dis:
+                    min_dis = temp
+                    # A lane consists of two left polyline and right polyline
+                    stage_one_label = i // 2
+
+            mapping['stage_one_label'] = stage_one_label
+
+    # print(len(polyline_spans), len(vectors), map_start_polyline_idx, polyline_spans[map_start_polyline_idx])
+
+    mapping.update(dict(
+        matrix=np.array(vectors),
+        labels=np.array(labels).reshape([args.future_frame_num, 2]),
+        polyline_spans=[slice(each[0], each[1]) for each in polyline_spans],
+        labels_is_valid=np.ones(args.future_frame_num, dtype=np.int64),
+        eval_time=60,
+
+        agents=agents,
+        map_start_polyline_idx=map_start_polyline_idx,
+        polygons=polygons,
+        file_name=os.path.split(instance_dir)[-1],
+        trajs=agents,
+        vis_lanes=polygons,
+    ))
+
+    return mapping
+
+
 def argoverse_get_instance(lines, file_name, args):
     """
     Extract polylines from one example file content.
@@ -443,15 +701,22 @@ class Dataset(torch.utils.data.Dataset):
             # self.ex_list = self.ex_list[len(self.ex_list) // 2:]
             pickle_file.close()
         else:
-            global am
-            am = ArgoverseMap()
+            if args.argoverse2:
+                pass
+            else:
+                from argoverse.map_representation.map_api import ArgoverseMap
+                global am
+                am = ArgoverseMap()
             if args.core_num >= 1:
                 # TODO
                 files = []
                 for each_dir in data_dir:
                     root, dirs, cur_files = os.walk(each_dir).__next__()
-                    files.extend([os.path.join(each_dir, file) for file in cur_files if
-                                  file.endswith("csv") and not file.startswith('.')])
+                    if args.argoverse2:
+                        files.extend([os.path.join(each_dir, file) for file in dirs])
+                    else:
+                        files.extend([os.path.join(each_dir, file) for file in cur_files if
+                                      file.endswith("csv") and not file.startswith('.')])
                 print(files[:5], files[-5:])
 
                 pbar = tqdm(total=len(files))
@@ -466,16 +731,24 @@ class Dataset(torch.utils.data.Dataset):
                         file = queue.get()
                         if file is None:
                             break
-                        if file.endswith("csv"):
-                            with open(file, "r", encoding='utf-8') as fin:
-                                lines = fin.readlines()[1:]
-                            instance = argoverse_get_instance(lines, file, args)
+
+                        def put_instance_in_queue(instance):
                             if instance is not None:
                                 data_compress = zlib.compress(pickle.dumps(instance))
                                 res.append(data_compress)
                                 queue_res.put(data_compress)
                             else:
                                 queue_res.put(None)
+
+                        if args.argoverse2:
+                            instance = argoverse2_get_instance(args, file)
+                            put_instance_in_queue(instance)
+                        else:
+                            if file.endswith("csv"):
+                                with open(file, "r", encoding='utf-8') as fin:
+                                    lines = fin.readlines()[1:]
+                                instance = argoverse_get_instance(lines, file, args)
+                                put_instance_in_queue(instance)
 
                 processes = [Process(target=calc_ex_list, args=(queue, queue_res, args,)) for _ in range(args.core_num)]
                 for each in processes:
@@ -535,8 +808,6 @@ class Dataset(torch.utils.data.Dataset):
 
 
 def post_eval(args, file2pred, file2labels, DEs):
-    from argoverse.evaluation import eval_forecasting
-
     score_file = args.model_recover_path.split('/')[-1]
     for each in args.eval_params:
         each = str(each)
@@ -560,7 +831,11 @@ def post_eval(args, file2pred, file2labels, DEs):
             type=score_file, to_screen=True, append_time=True)
     utils.logging('other_errors {}'.format(utils.other_errors_to_string()),
                   type=score_file, to_screen=True, append_time=True)
-    metric_results = eval_forecasting.get_displacement_errors_and_miss_rate(file2pred, file2labels, 6, 30, 2.0)
+    if args.argoverse2:
+        pass
+    else:
+        from argoverse.evaluation import eval_forecasting
+        metric_results = eval_forecasting.get_displacement_errors_and_miss_rate(file2pred, file2labels, 6, 30, 2.0)
     utils.logging(metric_results, type=score_file, to_screen=True, append_time=True)
     DE = np.concatenate(DEs, axis=0)
     length = DE.shape[1]
