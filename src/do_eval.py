@@ -23,10 +23,16 @@ def eval_instance_argoverse(batch_size, args, pred, mapping, file2pred, file2lab
     for i in range(batch_size):
         a_pred = pred[i]
         assert a_pred.shape == (6, args.future_frame_num, 2)
-        file_name_int = int(os.path.split(mapping[i]['file_name'])[1][:-4])
-        file2pred[file_name_int] = a_pred
-        if not args.do_test:
-            file2labels[file_name_int] = mapping[i]['origin_labels']
+
+        if args.argoverse2:
+            file_name = os.path.split(mapping[i]['file_name'])[1]
+            file2pred[file_name] = a_pred
+        else:
+            file_name_int = int(os.path.split(mapping[i]['file_name'])[1][:-4])
+            file2pred[file_name_int] = a_pred
+
+            if not args.do_test:
+                file2labels[file_name_int] = mapping[i]['origin_labels']
 
     if not args.do_test:
         DE = np.zeros([batch_size, args.future_frame_num])
@@ -80,6 +86,9 @@ def do_eval(args):
     DEs = []
     length = len(iter_bar)
 
+    if args.argoverse2:
+        metrics = utils.PredictionMetrics()
+
     argo_pred = structs.ArgoPred()
 
     for step, batch in enumerate(iter_bar):
@@ -92,12 +101,38 @@ def do_eval(args):
             assert pred_score[i].shape == (6,)
             argo_pred[mapping[i]['file_name']] = structs.MultiScoredTrajectory(pred_score[i].copy(), pred_trajectory[i].copy())
 
-        if args.argoverse:
+        if args.argoverse2:
+            for i in range(batch_size):
+                from av2.datasets.motion_forecasting.eval.metrics \
+                    import compute_ade, compute_fde, compute_brier_fde
+
+                forecasted_trajectories = pred_trajectory[i][:, :, :]
+                gt_trajectory = mapping[i]['gt_trajectory_global_coordinates'][:, :]
+                forecast_probabilities = np.exp(pred_score[i])
+                forecast_probabilities = forecast_probabilities * (1.0 / forecast_probabilities.sum())
+
+                assert forecasted_trajectories.shape == (6, 60, 2)
+                assert gt_trajectory.shape == (60, 2)
+                assert forecast_probabilities.shape == (6,)
+
+                ade = compute_ade(forecasted_trajectories, gt_trajectory)
+                fde = compute_fde(forecasted_trajectories, gt_trajectory)
+                brier_fde = compute_brier_fde(forecasted_trajectories, gt_trajectory, forecast_probabilities)
+                metrics.minADE.accumulate(ade.min())
+                metrics.minFDE.accumulate(fde.min())
+                metrics.MR.accumulate(fde.min() > 2.0)
+                metrics.brier_minFDE.accumulate(brier_fde.min())
+        else:
             eval_instance_argoverse(batch_size, args, pred_trajectory, mapping, file2pred, file2labels, DEs, iter_bar)
+
     if 'optimization' in args.other_params:
         utils.select_goals_by_optimization(None, None, close=True)
 
-    if args.argoverse:
+    if args.argoverse2:
+        import json
+        print('Metrics:')
+        print(json.dumps(metrics.serialize(), indent=4))
+    else:
         from dataset_argoverse import post_eval
         post_eval(args, file2pred, file2labels, DEs)
 

@@ -3,6 +3,8 @@
 - This is the official implementation of the paper: **DenseTNT: End-to-end Trajectory Prediction from Dense Goal Sets** (ICCV 2021).
 - **DenseTNT v1.0** was released in November 1st, 2021.
 - Updates: 
+  - June 24th, 2023: Add evaluation metrics for Argoverse 2.
+  - Sep 3, 2022: Add training code for Argoverse 2.
   - July 25th, 2022: Add detailed code comments.
 
 ## Quick Start
@@ -27,12 +29,35 @@ https://github.com/argoai/av2-api
 Compile a .pyx file into a C file using Cython (already installed at step 1):
 
 
-⚠️*Recompiling is needed every time the pyx files are changed.*
 ``` bash
 cd src/ && cython -a utils_cython.pyx && python setup.py build_ext --inplace && cd ../
 ```
 
- 
+ ## Performance
+
+Results on Argoverse 2:
+
+<table class="tg">
+<thead>
+  <tr>
+    <th class="tg-baqh"></th>
+    <th class="tg-baqh">brier-minFDE</th>
+    <th class="tg-baqh">minADE</th>
+    <th class="tg-baqh">minFDE</th>
+    <th class="tg-baqh">MR</th>
+  </tr>
+</thead>
+<tbody>
+  <tr>
+    <td class="tg-baqh">validation set</td>
+    <td class="tg-baqh">2.38</td>
+    <td class="tg-baqh">1.00</td>
+    <td class="tg-baqh">1.71</td>
+    <td class="tg-baqh">0.216</td>
+  </tr>
+</tbody>
+</table>
+
 
 ## DenseTNT
 
@@ -50,6 +75,13 @@ python src/run.py --argoverse --argoverse2 --future_frame_num 60 \
     goals_2D enhance_global_graph subdivide goal_scoring laneGCN point_sub_graph \
     lane_scoring complete_traj complete_traj-3 \
 ```
+
+### 2) Evaluate
+Suppose the validation data of Argoverse motion forecasting is at ```./val/data/```.
+
+* Optimize minFDE: 
+  - Add ```--do_eval --eval_params optimization MRminFDE=0.0 cnt_sample=9 opti_time=0.1``` to the end of the training command.
+
 
 ## Citation
 If you find our work useful for your research, please consider citing the paper:

@@ -911,7 +911,7 @@ def select_goal_pairs_by_NMS(mapping: Dict, mapping_oppo: Dict, goals_4D: np.nda
     def in_predict(pred_goal_pairs, goal_pair, thresholds):
         # pred_goal_pairs [..., 2, 2]
         return np.min(get_dis_point_2_points(goal_pair[0], pred_goal_pairs[:, 0, :])) < thresholds[0] \
-               and np.min(get_dis_point_2_points(goal_pair[1], pred_goal_pairs[:, 1, :])) < thresholds[1]
+            and np.min(get_dis_point_2_points(goal_pair[1], pred_goal_pairs[:, 1, :])) < thresholds[1]
 
     add_eval_param(f'DY_NMS={threshold}')
 
@@ -1353,7 +1353,7 @@ def run_process(queue, queue_res, args):
         queue_res.put((idx_in_batch, expectation, ans_points, pred_probs))
     pass
 
-    print('out run_process', get_time(), id)
+    # print('out run_process', get_time(), id)
 
 
 def select_goals_by_optimization(batch_gt_points, mapping, close=False):
@@ -1751,3 +1751,37 @@ def get_static_var(obj, name, default=None, path=None):
 
 def to_numpy(tensor):
     return tensor.detach().cpu().numpy()
+
+
+class Metric:
+    def __init__(self):
+        self.values = []
+
+    def accumulate(self, value):
+        if value is not None:
+            self.values.append(value)
+
+    def get_mean(self):
+        if len(self.values) > 0:
+            return np.mean(self.values)
+        else:
+            return 0.0
+
+    def get_sum(self):
+        return np.sum(self.values)
+
+
+class PredictionMetrics:
+    def __init__(self):
+        self.minADE = Metric()
+        self.minFDE = Metric()
+        self.MR = Metric()
+        self.brier_minFDE = Metric()
+
+    def serialize(self) -> Dict[str, Any]:
+        return dict(
+            minADE=self.minADE.get_mean(),
+            minFDE=self.minFDE.get_mean(),
+            MR=self.MR.get_mean(),
+            brier_minFDE=self.brier_minFDE.get_mean(),
+        )

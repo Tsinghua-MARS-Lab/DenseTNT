@@ -401,6 +401,7 @@ def argoverse2_get_instance(args: utils.Args, instance_dir):
     agents = []
     polygons = []
     labels = []
+    gt_trajectory_global_coordinates = []
 
     # find focal track
     if True:
@@ -436,6 +437,7 @@ def argoverse2_get_instance(args: utils.Args, instance_dir):
                 normalizer = utils.Normalizer(cent_x, cent_y, angle)
             elif state.timestep >= 50:
                 labels.append(normalizer((state.position[0], state.position[1])))
+                gt_trajectory_global_coordinates.append((state.position[0], state.position[1]))
 
         assert cent_x is not None
         mapping.update(dict(
@@ -583,6 +585,7 @@ def argoverse2_get_instance(args: utils.Args, instance_dir):
     mapping.update(dict(
         matrix=np.array(vectors),
         labels=np.array(labels).reshape([args.future_frame_num, 2]),
+        gt_trajectory_global_coordinates=np.array(gt_trajectory_global_coordinates),
         polyline_spans=[slice(each[0], each[1]) for each in polyline_spans],
         labels_is_valid=np.ones(args.future_frame_num, dtype=np.int64),
         eval_time=60,
