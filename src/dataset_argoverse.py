@@ -498,8 +498,8 @@ def argoverse2_get_instance(args: utils.Args, instance_dir):
 
         lane_type_to_int = defaultdict(int)
         lane_type_to_int[LaneType.VEHICLE] = 1
-        lane_type_to_int[LaneType.BIKE] = 1
-        lane_type_to_int[LaneType.BUS] = 1
+        lane_type_to_int[LaneType.BIKE] = 2
+        lane_type_to_int[LaneType.BUS] = 3
 
         mark_type_to_int = get_mark_type_to_int()
 

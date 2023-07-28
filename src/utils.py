@@ -42,10 +42,10 @@ def add_argument(parser):
     parser.add_argument("--do_test",
                         action='store_true')
     parser.add_argument("--data_dir",
-                        default='train/data/',
+                        default='data/train',
                         type=str)
     parser.add_argument("--data_dir_for_val",
-                        default='val/data/',
+                        default='data/val',
                         type=str)
     parser.add_argument("--output_dir", default="tmp/", type=str)
     parser.add_argument("--log_dir", default=None, type=str)

@@ -206,6 +206,8 @@ def _get_optimal_targets(np.ndarray[np.float32_t, ndim=2] goals_2D, np.ndarray[n
             m += 1
     if m == 0:
         print('warning: m == 0')
+        m = n
+
     n = m
 
     for j in range(6):
