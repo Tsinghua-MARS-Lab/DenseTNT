@@ -202,9 +202,8 @@ def train_one_epoch(model, iter_bar, optimizer, device, args: utils.Args, i_epoc
                       type='train_loss', to_screen=True)
 
 
-def demo_basic(rank, world_size, kwargs, queue):
-    args = kwargs['args']
-    if world_size > 0:
+def run_training_process(rank, world_size, args, queue):
+    if args.distributed_training:
         print(f"Running DDP on rank {rank}.")
 
         def setup(rank, world_size):
@@ -226,29 +225,32 @@ def demo_basic(rank, world_size, kwargs, queue):
     if 'set_predict' in args.other_params:
         optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=args.learning_rate)
     elif 'complete_traj-3' in args.other_params:
+        prefix = 'module.' if isinstance(model, DDP) else ''
         optimizer = torch.optim.Adam(
-            [each[1] for each in model.named_parameters() if not str(each[0]).startswith('module.decoder.complete_traj')],
+            [each[1] for each in model.named_parameters() if not str(each[0]).startswith(f'{prefix}decoder.complete_traj')],
             lr=args.learning_rate)
         optimizer_2 = torch.optim.Adam(
-            [each[1] for each in model.named_parameters() if str(each[0]).startswith('module.decoder.complete_traj')],
+            [each[1] for each in model.named_parameters() if str(each[0]).startswith(f'{prefix}decoder.complete_traj')],
             lr=args.learning_rate)
     else:
         optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
 
-    if rank == 0 and world_size > 0:
-        receive = queue.get()
-        assert receive == True
-
     if args.distributed_training:
+        if rank == 0:
+            receive = queue.get()
+            assert receive == True
         dist.barrier()
-    args.reuse_temp_file = True
+        args.reuse_temp_file = True
 
     if args.argoverse:
-        if args.argoverse:
-            from dataset_argoverse import Dataset
-        train_dataset = Dataset(args, args.train_batch_size, to_screen=False)
+        from dataset_argoverse import Dataset
+        train_dataset = Dataset(args, args.train_batch_size, to_screen=args.distributed_training == 0)
 
-        train_sampler = DistributedSampler(train_dataset, shuffle=args.do_train)
+        if args.distributed_training:
+            train_sampler = DistributedSampler(train_dataset, shuffle=args.do_train)
+        else:
+            train_sampler = RandomSampler(train_dataset)
+
         assert args.train_batch_size == 64, 'The optimal total batch size for training is 64'
         assert args.train_batch_size % world_size == 0
         train_dataloader = torch.utils.data.DataLoader(
@@ -265,7 +267,8 @@ def demo_basic(rank, world_size, kwargs, queue):
         if rank == 0:
             print('Epoch: {}/{}'.format(i_epoch, int(args.num_train_epochs)), end='  ')
             print('Learning Rate = %5.8f' % optimizer.state_dict()['param_groups'][0]['lr'])
-        train_sampler.set_epoch(i_epoch)
+        if args.distributed_training:
+            train_sampler.set_epoch(i_epoch)
         if rank == 0:
             iter_bar = tqdm(train_dataloader, desc='Iter (loss=X.XXX)')
         else:
@@ -282,7 +285,7 @@ def demo_basic(rank, world_size, kwargs, queue):
         dist.destroy_process_group()
 
 
-def run(args):
+def do_train(args):
     device = torch.device(
         "cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
 
@@ -292,17 +295,17 @@ def run(args):
 
     if args.distributed_training:
         queue = mp.Manager().Queue()
-        kwargs = {'args': args}
-        spawn_context = mp.spawn(demo_basic,
-                                 args=(args.distributed_training, kwargs, queue),
+        # initialize dataset before distributed training
+        Dataset(args, args.train_batch_size)
+        spawn_context = mp.spawn(run_training_process,
+                                 args=(args.distributed_training, args, queue),
                                  nprocs=args.distributed_training,
                                  join=False)
-        train_dataset = Dataset(args, args.train_batch_size)
         queue.put(True)
         while not spawn_context.join():
             pass
     else:
-        assert False, 'Please set "--distributed_training 1" to use single gpu'
+        run_training_process(0, 1, args, None)
 
 
 def main():
@@ -317,7 +320,7 @@ def main():
 
     if args.argoverse:
         if args.do_train:
-            run(args)
+            do_train(args)
         else:
             from do_eval import do_eval
             do_eval(args)
